@@ -1,0 +1,77 @@
+@MemStack_HostAddress = http://localhost:5294
+
+### 1. List all feature memories
+GET {{MemStack_HostAddress}}/api/feature-memories
+Accept: application/json
+
+###
+
+### 2. Get one by ID
+GET {{MemStack_HostAddress}}/api/feature-memories/1
+Accept: application/json
+
+###
+
+### 3. Create a feature memory (POST)
+POST {{MemStack_HostAddress}}/api/feature-memories
+Content-Type: application/json
+
+{
+  "externalFeatureId": "feature/promotion-engine-v2",
+  "sourceSystem": "nexwork",
+  "title": "Promotion Engine V2",
+  "productName": "Coloris",
+  "customerName": "Internal",
+  "requirementMarkdown": "# Requirement\nBuild v2 of the promotion engine.",
+  "implementationMarkdown": "# Implementation\nTBD",
+  "summaryMarkdown": "# Summary\nTBD",
+  "status": "Planned",
+  "tags": "promotion,checkout"
+}
+
+###
+
+### 4. Full update (PUT) - replaces all fields
+PUT {{MemStack_HostAddress}}/api/feature-memories/1
+Content-Type: application/json
+
+{
+  "externalFeatureId": "feature/promotion-engine-v2",
+  "sourceSystem": "nexwork",
+  "title": "Promotion Engine V2",
+  "productName": "Coloris",
+  "customerName": "Internal",
+  "requirementMarkdown": "# Requirement\nBuild v2 of the promotion engine.",
+  "implementationMarkdown": "# Implementation\nService + queue added.",
+  "summaryMarkdown": "# Summary\nAsync flow implemented.",
+  "status": "InProgress",
+  "tags": "promotion,checkout,async"
+}
+
+###
+
+### 5. Partial update (PATCH) - only send what changed
+PATCH {{MemStack_HostAddress}}/api/feature-memories/1
+Content-Type: application/json
+
+{
+  "status": "Done",
+  "implementationMarkdown": "# Implementation\nCompleted and deployed."
+}
+
+###
+
+### 6. Sync summary - called by Nexwork when feature completes
+POST {{MemStack_HostAddress}}/api/feature-memories/1/sync-summary
+Content-Type: application/json
+
+{
+  "summaryMarkdown": "# Summary\nPromotion engine v2 shipped successfully."
+}
+
+###
+
+### 7. Delete
+DELETE {{MemStack_HostAddress}}/api/feature-memories/1
+
+###

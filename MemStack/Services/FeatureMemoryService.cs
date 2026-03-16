@@ -1,0 +1,636 @@
+using MemStack.Data;
+using MemStack.Model;
+
+namespace MemStack.Services;
+
+public class FeatureMemoryService(
+    IFeatureMemoryRepository repository,
+    IGitRepository gitRepository) : IFeatureMemoryService
+{
+    private static readonly HashSet<string> AllowedStatuses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Planned", "InProgress", "Done", "Blocked"
+    };
+
+    public IReadOnlyList<FeatureMemoryResponse> GetAll() => repository.GetAll().Select(MapToResponse).ToList();
+
+    public FeatureMemoryResponse? GetById(int id)
+    {
+        var item = repository.GetById(id);
+        return item is null ? null : MapToResponse(item);
+    }
+
+    public IReadOnlyList<FeatureMemoryResponse> Search(FeatureMemorySearchRequest request)
+    {
+        return repository
+            .Search(request.Query, request.ProductName, request.Status, request.Tags)
+            .Select(MapToResponse)
+            .ToList();
+    }
+
+    public FeatureMemoryAskResponse Ask(FeatureMemoryAskRequest request)
+    {
+        var trimmedQuestion = request.Question.Trim();
+        var normalizedProjects = request.Projects
+            .Where(project => !string.IsNullOrWhiteSpace(project))
+            .Select(project => project.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var normalizedTags = request.Tags
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Select(tag => tag.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var candidates = repository.GetAll();
+
+        if (!string.IsNullOrWhiteSpace(request.ProductName))
+        {
+            var productName = request.ProductName.Trim();
+            candidates = candidates
+                .Where(item => item.ProductName.Contains(productName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.FeatureName))
+        {
+            var featureName = request.FeatureName.Trim();
+            candidates = candidates
+                .Where(item =>
+                    item.Title.Contains(featureName, StringComparison.OrdinalIgnoreCase) ||
+                    item.ExternalFeatureId.Contains(featureName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        if (normalizedTags.Count > 0)
+        {
+            candidates = candidates
+                .Where(item => normalizedTags.Any(tag => item.Tags.Contains(tag, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+        }
+
+        var ranked = candidates
+            .Select(item => new
+            {
+                Item = item,
+                Score = ScoreFeatureMemory(item, trimmedQuestion, normalizedProjects, normalizedTags)
+            })
+            .Where(entry => entry.Score > 0)
+            .OrderByDescending(entry => entry.Score)
+            .ThenByDescending(entry => entry.Item.UpdatedAtUtc)
+            .Take(3)
+            .ToList();
+
+        if (ranked.Count == 0)
+        {
+            return new FeatureMemoryAskResponse
+            {
+                Status = "no_match",
+                Verdict = "uncertain",
+                Answer = "I could not find a matching feature memory record for this question.",
+                Why = ["No stored requirement or implementation notes matched the provided question and filters."],
+                RelatedProjects = normalizedProjects,
+                PossibleChecks =
+                [
+                    "Add more project names if you know which systems are involved.",
+                    "Try a more specific question with a promotion code, feature name, or ticket ID."
+                ],
+                Confidence = "low"
+            };
+        }
+
+        var topMatch = ranked[0].Item;
+        var sources = BuildSources(ranked.Select(entry => entry.Item).ToList(), trimmedQuestion, normalizedProjects);
+        var why = BuildWhy(topMatch, normalizedProjects);
+        var possibleChecks = BuildPossibleChecks(topMatch, normalizedProjects, trimmedQuestion);
+
+        return new FeatureMemoryAskResponse
+        {
+            Status = "answered",
+            Verdict = DeriveVerdict(topMatch, trimmedQuestion),
+            Answer = BuildAnswer(topMatch),
+            Why = why,
+            RelatedProjects = normalizedProjects,
+            PossibleChecks = possibleChecks,
+            Sources = sources,
+            Confidence = DeriveConfidence(ranked[0].Score, ranked.Count)
+        };
+    }
+
+    public FeatureMemoryResponse SyncFromNexwork(FeatureMemorySyncRequest request)
+    {
+        var now = DateTime.UtcNow;
+        var existing = repository.GetByExternalFeatureId(request.Feature.Name);
+        var memstackData = request.PluginData is not null && request.PluginData.TryGetValue("memstack", out var rawMemstack)
+            ? rawMemstack as Dictionary<string, object>
+            : null;
+
+        var item = existing ?? new FeatureMemory
+        {
+            ExternalFeatureId = request.Feature.Name,
+            SourceSystem = "nexwork",
+            Title = request.Feature.Name,
+            ProductName = InferProductName(request.Feature),
+            CustomerName = "Nexwork",
+            CreatedAtUtc = ParseDateOrFallback(request.Feature.CreatedAt, now),
+        };
+
+        item.ExternalFeatureId = request.Feature.Name;
+        item.SourceSystem = "nexwork";
+        item.Title = request.Feature.Name;
+        item.ProductName = ExtractString(memstackData, "productName", item.ProductName, InferProductName(request.Feature));
+        item.CustomerName = ExtractString(memstackData, "customerName", item.CustomerName, "Nexwork");
+        item.RequirementMarkdown = ExtractString(memstackData, "requirement", item.RequirementMarkdown, item.RequirementMarkdown);
+        item.SummaryMarkdown = BuildSummaryMarkdown(request, memstackData, item);
+        item.ImplementationMarkdown = BuildImplementationSection(request, item);
+        item.Tags = BuildTags(request, memstackData, item.Tags);
+        item.Status = NormalizeStatus(MapFeatureStatus(request, item.Status));
+        item.UpdatedAtUtc = ParseDateOrFallback(request.Feature.UpdatedAt, now);
+
+        FeatureMemory persisted;
+        if (existing is null)
+        {
+            persisted = repository.Add(item);
+        }
+        else
+        {
+            persisted = repository.Update(item) ?? item;
+        }
+
+        gitRepository.CommitFeatureMemory(
+            persisted,
+            request.EventName,
+            request.StorageTarget,
+            request.GitAccount);
+
+        return MapToResponse(persisted);
+    }
+
+    public FeatureMemoryResponse Create(FeatureMemoryRequest request)
+    {
+        var now = DateTime.UtcNow;
+        var item = new FeatureMemory
+        {
+            ExternalFeatureId = request.ExternalFeatureId.Trim(),
+            SourceSystem = request.SourceSystem.Trim(),
+            Title = request.Title.Trim(),
+            ProductName = request.ProductName.Trim(),
+            CustomerName = request.CustomerName.Trim(),
+            RequirementMarkdown = request.RequirementMarkdown,
+            ImplementationMarkdown = request.ImplementationMarkdown,
+            SummaryMarkdown = request.SummaryMarkdown,
+            Status = NormalizeStatus(request.Status),
+            Tags = request.Tags.Trim(),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now
+        };
+
+        var created = repository.Add(item);
+        gitRepository.CommitFeatureMemory(created, "create");
+        return MapToResponse(created);
+    }
+
+    public FeatureMemoryResponse? Update(int id, FeatureMemoryRequest request)
+    {
+        var existing = repository.GetById(id);
+        if (existing is null)
+        {
+            return null;
+        }
+
+        existing.ExternalFeatureId = request.ExternalFeatureId.Trim();
+        existing.SourceSystem = request.SourceSystem.Trim();
+        existing.Title = request.Title.Trim();
+        existing.ProductName = request.ProductName.Trim();
+        existing.CustomerName = request.CustomerName.Trim();
+        existing.RequirementMarkdown = request.RequirementMarkdown;
+        existing.ImplementationMarkdown = request.ImplementationMarkdown;
+        existing.SummaryMarkdown = request.SummaryMarkdown;
+        existing.Status = NormalizeStatus(request.Status);
+        existing.Tags = request.Tags.Trim();
+        existing.UpdatedAtUtc = DateTime.UtcNow;
+
+        var updated = repository.Update(existing);
+        if (updated is not null)
+        {
+            gitRepository.CommitFeatureMemory(updated, "update");
+        }
+        return updated is null ? null : MapToResponse(updated);
+    }
+
+    // PATCH: only update the fields that are provided (non-null)
+    public FeatureMemoryResponse? Patch(int id, FeatureMemoryPatchRequest request)
+    {
+        var existing = repository.GetById(id);
+        if (existing is null) return null;
+
+        if (request.RequirementMarkdown is not null)
+            existing.RequirementMarkdown = request.RequirementMarkdown;
+        if (request.ImplementationMarkdown is not null)
+            existing.ImplementationMarkdown = request.ImplementationMarkdown;
+        if (request.SummaryMarkdown is not null)
+            existing.SummaryMarkdown = request.SummaryMarkdown;
+        if (request.Status is not null)
+            existing.Status = NormalizeStatus(request.Status);
+        if (request.Tags is not null)
+            existing.Tags = request.Tags.Trim();
+
+        existing.UpdatedAtUtc = DateTime.UtcNow;
+
+        var updated = repository.Update(existing);
+        if (updated is not null)
+            gitRepository.CommitFeatureMemory(updated, "patch");
+        return updated is null ? null : MapToResponse(updated);
+    }
+
+    // sync-summary: triggered by Nexwork when a feature is completed (guide Step 6 + Step 7)
+    public FeatureMemoryResponse? SyncSummary(int id, string summaryMarkdown)
+    {
+        var existing = repository.GetById(id);
+        if (existing is null) return null;
+
+        existing.SummaryMarkdown = summaryMarkdown;
+        existing.UpdatedAtUtc = DateTime.UtcNow;
+
+        var updated = repository.Update(existing);
+        if (updated is not null)
+            gitRepository.CommitFeatureMemory(updated, "sync-summary");
+        return updated is null ? null : MapToResponse(updated);
+    }
+
+    public bool Delete(int id)
+    {        var existing = repository.GetById(id);
+        var deleted = repository.Delete(id);
+        if (deleted && existing is not null)
+        {
+            gitRepository.DeleteFeatureMemory(existing);
+        }
+        return deleted;
+    }
+
+    public bool IsValidStatus(string status) => AllowedStatuses.Contains(status.Trim());
+
+    private static string NormalizeStatus(string status)
+    {
+        var trimmed = status.Trim();
+        return AllowedStatuses.First(x => x.Equals(trimmed, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static FeatureMemoryResponse MapToResponse(FeatureMemory item)
+    {
+        return new FeatureMemoryResponse
+        {
+            Id = item.Id,
+            ExternalFeatureId = item.ExternalFeatureId,
+            SourceSystem = item.SourceSystem,
+            Title = item.Title,
+            ProductName = item.ProductName,
+            CustomerName = item.CustomerName,
+            RequirementMarkdown = item.RequirementMarkdown,
+            ImplementationMarkdown = item.ImplementationMarkdown,
+            SummaryMarkdown = item.SummaryMarkdown,
+            Status = item.Status,
+            Tags = item.Tags,
+            CreatedAtUtc = item.CreatedAtUtc,
+            UpdatedAtUtc = item.UpdatedAtUtc
+        };
+    }
+
+    private static string BuildSummaryMarkdown(
+        FeatureMemorySyncRequest request,
+        Dictionary<string, object>? memstackData,
+        FeatureMemory current)
+    {
+        var requirementSummary = ExtractString(memstackData, "requirementSummary", current.SummaryMarkdown, string.Empty);
+        if (!string.IsNullOrWhiteSpace(requirementSummary) && request.EventName == "feature.created")
+        {
+            return requirementSummary;
+        }
+
+        var lines = new List<string>
+        {
+            $"Feature `{request.Feature.Name}` synced from Nexwork.",
+            $"Lifecycle event: {request.EventName}.",
+        };
+
+        if (request.Feature.Projects.Count > 0)
+        {
+            lines.Add("Projects:");
+            lines.AddRange(request.Feature.Projects.Select(project => $"- {project.Name}: {project.Status}"));
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string BuildImplementationSection(FeatureMemorySyncRequest request, FeatureMemory current)
+    {
+        var lines = new List<string>
+        {
+            $"Sync event: {request.EventName}",
+            $"Updated at: {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC",
+        };
+
+        if (!string.IsNullOrWhiteSpace(request.ProjectName) && !string.IsNullOrWhiteSpace(request.Status))
+        {
+            lines.Add($"Changed project: {request.ProjectName} -> {request.Status}");
+        }
+
+        if (request.Feature.Projects.Count > 0)
+        {
+            lines.Add("Projects:");
+            lines.AddRange(request.Feature.Projects.Select(project =>
+                $"- {project.Name}: status={project.Status}, branch={project.Branch}, base={project.BaseBranch ?? "unknown"}"));
+        }
+
+        var newSection = string.Join(Environment.NewLine, lines);
+        return string.IsNullOrWhiteSpace(current.ImplementationMarkdown)
+            ? newSection
+            : $"{current.ImplementationMarkdown}{Environment.NewLine}{Environment.NewLine}---{Environment.NewLine}{newSection}";
+    }
+
+    private static string BuildTags(FeatureMemorySyncRequest request, Dictionary<string, object>? memstackData, string existingTags)
+    {
+        var tags = new HashSet<string>(SplitCsv(existingTags), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var tag in SplitCsv(ExtractString(memstackData, "tags", string.Empty, string.Empty)))
+        {
+            tags.Add(tag);
+        }
+
+        foreach (var project in request.Feature.Projects.Select(project => project.Name))
+        {
+            tags.Add(project);
+        }
+
+        return string.Join(", ", tags.OrderBy(tag => tag));
+    }
+
+    private static string InferProductName(FeatureSyncPayload feature)
+    {
+        return feature.Projects.FirstOrDefault()?.Name ?? "Unknown";
+    }
+
+    private static string MapFeatureStatus(FeatureMemorySyncRequest request, string fallback)
+    {
+        if (request.EventName == "feature.completed")
+        {
+            return "Done";
+        }
+
+        if (request.Feature.Projects.Count > 0 && request.Feature.Projects.All(project => string.Equals(project.Status, "completed", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "Done";
+        }
+
+        if (request.Feature.Projects.Any(project => string.Equals(project.Status, "in_progress", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "InProgress";
+        }
+
+        return string.IsNullOrWhiteSpace(fallback) ? "Planned" : fallback;
+    }
+
+    private static string ExtractString(Dictionary<string, object>? source, string propertyName, string currentValue, string fallback)
+    {
+        if (source is not null && source.TryGetValue(propertyName, out var value))
+        {
+            if (value is string stringValue && !string.IsNullOrWhiteSpace(stringValue))
+            {
+                return stringValue.Trim();
+            }
+
+            if (value is IEnumerable<object> listValue)
+            {
+                var joined = string.Join(", ", listValue.Select(item => item?.ToString()).Where(item => !string.IsNullOrWhiteSpace(item)));
+                if (!string.IsNullOrWhiteSpace(joined))
+                {
+                    return joined;
+                }
+            }
+        }
+
+        return !string.IsNullOrWhiteSpace(currentValue) ? currentValue : fallback;
+    }
+
+    private static IEnumerable<string> SplitCsv(string? value)
+    {
+        return (value ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(item => !string.IsNullOrWhiteSpace(item));
+    }
+
+    private static DateTime ParseDateOrFallback(string? value, DateTime fallback)
+    {
+        return DateTime.TryParse(value, out var parsed) ? parsed : fallback;
+    }
+
+    private static int ScoreFeatureMemory(
+        FeatureMemory item,
+        string question,
+        IReadOnlyList<string> projects,
+        IReadOnlyList<string> tags)
+    {
+        var score = 0;
+        var content = string.Join(
+            '\n',
+            item.Title,
+            item.ExternalFeatureId,
+            item.ProductName,
+            item.CustomerName,
+            item.RequirementMarkdown,
+            item.ImplementationMarkdown,
+            item.SummaryMarkdown,
+            item.Tags);
+
+        var loweredContent = content.ToLowerInvariant();
+        foreach (var token in ExtractTokens(question))
+        {
+            if (loweredContent.Contains(token))
+            {
+                score += 3;
+            }
+        }
+
+        foreach (var project in projects)
+        {
+            if (loweredContent.Contains(project.ToLowerInvariant()))
+            {
+                score += 5;
+            }
+        }
+
+        foreach (var tag in tags)
+        {
+            if (item.Tags.Contains(tag, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 4;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.SummaryMarkdown))
+        {
+            score += 1;
+        }
+
+        return score;
+    }
+
+    private static List<string> ExtractTokens(string text)
+    {
+        return text
+            .Split([' ', ',', '.', ':', ';', '!', '?', '\n', '\r', '\t', '-', '_', '/', '\\'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(token => token.Trim().ToLowerInvariant())
+            .Where(token => token.Length >= 4)
+            .Distinct()
+            .ToList();
+    }
+
+    private static string BuildAnswer(FeatureMemory item)
+    {
+        var summary = FirstNonEmptyParagraph(item.SummaryMarkdown);
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            return summary;
+        }
+
+        var implementation = FirstNonEmptyParagraph(item.ImplementationMarkdown);
+        if (!string.IsNullOrWhiteSpace(implementation))
+        {
+            return implementation;
+        }
+
+        var requirement = FirstNonEmptyParagraph(item.RequirementMarkdown);
+        if (!string.IsNullOrWhiteSpace(requirement))
+        {
+            return requirement;
+        }
+
+        return $"I found a related feature memory record: {item.Title}.";
+    }
+
+    private static List<string> BuildWhy(FeatureMemory item, IReadOnlyList<string> projects)
+    {
+        var reasons = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(item.RequirementMarkdown))
+        {
+            reasons.Add("A matching requirement record exists for this feature.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.ImplementationMarkdown))
+        {
+            reasons.Add("Implementation notes are available for the matched feature.");
+        }
+
+        if (projects.Count > 0)
+        {
+            reasons.Add($"Project filter matched: {string.Join(", ", projects)}.");
+        }
+
+        reasons.Add($"Most relevant feature: {item.Title}.");
+        return reasons;
+    }
+
+    private static List<string> BuildPossibleChecks(FeatureMemory item, IReadOnlyList<string> projects, string question)
+    {
+        var checks = new List<string>();
+
+        if (projects.Count > 0)
+        {
+            checks.Add($"Verify the current behavior in: {string.Join(", ", projects)}.");
+        }
+
+        if (question.Contains("promotion", StringComparison.OrdinalIgnoreCase) ||
+            question.Contains("discount", StringComparison.OrdinalIgnoreCase) ||
+            question.Contains("price", StringComparison.OrdinalIgnoreCase) ||
+            question.Contains("money", StringComparison.OrdinalIgnoreCase))
+        {
+            checks.Add("Review the stored calculation and business-rule notes for money-related logic.");
+        }
+
+        checks.Add($"Compare the current behavior against feature memory record '{item.Title}'.");
+        return checks;
+    }
+
+    private static List<FeatureMemoryAskSource> BuildSources(IReadOnlyList<FeatureMemory> items, string question, IReadOnlyList<string> projects)
+    {
+        var sources = new List<FeatureMemoryAskSource>();
+
+        foreach (var item in items)
+        {
+            if (!string.IsNullOrWhiteSpace(item.SummaryMarkdown))
+            {
+                sources.Add(CreateSource(item, "Summary"));
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.ImplementationMarkdown) &&
+                (projects.Count > 0 || question.Contains("how", StringComparison.OrdinalIgnoreCase) || question.Contains("why", StringComparison.OrdinalIgnoreCase)))
+            {
+                sources.Add(CreateSource(item, "Implementation"));
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.RequirementMarkdown))
+            {
+                sources.Add(CreateSource(item, "Requirement"));
+            }
+        }
+
+        return sources
+            .GroupBy(source => new { source.FeatureMemoryId, source.Section })
+            .Select(group => group.First())
+            .Take(6)
+            .ToList();
+    }
+
+    private static FeatureMemoryAskSource CreateSource(FeatureMemory item, string section)
+    {
+        return new FeatureMemoryAskSource
+        {
+            FeatureMemoryId = item.Id,
+            FeatureTitle = item.Title,
+            FeatureExternalId = item.ExternalFeatureId,
+            Section = section
+        };
+    }
+
+    private static string DeriveVerdict(FeatureMemory item, string question)
+    {
+        if (question.Contains("bug", StringComparison.OrdinalIgnoreCase) ||
+            question.Contains("wrong", StringComparison.OrdinalIgnoreCase) ||
+            question.Contains("not get", StringComparison.OrdinalIgnoreCase) ||
+            question.Contains("did not get", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.IsNullOrWhiteSpace(item.ImplementationMarkdown) ? "uncertain" : "expected";
+        }
+
+        return "uncertain";
+    }
+
+    private static string DeriveConfidence(int topScore, int matchCount)
+    {
+        if (topScore >= 12 && matchCount > 0)
+        {
+            return "high";
+        }
+
+        if (topScore >= 6)
+        {
+            return "medium";
+        }
+
+        return "low";
+    }
+
+    private static string FirstNonEmptyParagraph(string markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return string.Empty;
+        }
+
+        return markdown
+            .Split(["\r\n\r\n", "\n\n"], StringSplitOptions.RemoveEmptyEntries)
+            .Select(section => section.Trim())
+            .FirstOrDefault(section => !string.IsNullOrWhiteSpace(section)) ?? string.Empty;
+    }
+}
