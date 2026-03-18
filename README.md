@@ -1,73 +1,115 @@
 # MemStack
 
-MemStack is the knowledge backend for structured feature memory. It stores requirement history, implementation notes, and topic wiki documents so Nexwork and future tools can retrieve grounded business context later.
+MemStack is the external knowledge backend for Feature Memory. It stores structured business context so Nexwork and future tools can retrieve feature intent, implementation notes, topic-level wiki knowledge, and grounded answers later.
 
-## What is implemented
+## Current implementation
 
 - ASP.NET Core 10 Web API
 - SQLite persistence through EF Core
-- Feature memory CRUD, search, ask, and Nexwork sync endpoints
-- Git-backed markdown generation for:
+- CRUD, search, ask, and Nexwork sync endpoints
+- markdown generation for:
   - `Features/<year>/<feature-slug>/requirement.md`
   - `Features/<year>/<feature-slug>/implementation.md`
   - `Wiki/<topic>.md`
   - `PROJECT_CONTEXT.md`
-- Remote file upsert support for GitHub and GitLab when Nexwork sends storage repo + Git account context
+- remote GitHub and GitLab file upserts
+- Docker-based Render deployment support
+- Swagger UI support
 
-## Project structure
+## Relationship with Nexwork
 
-- `MemStack/Controller/FeatureMemoryController.cs` - HTTP endpoints
-- `MemStack/Services/FeatureMemoryService.cs` - business logic and Nexwork sync mapping
-- `MemStack/Data/GitRepository.cs` - markdown writing and remote Git upserts
-- `MemStack/Data/MemStackDbContext.cs` - EF Core DB context
-- `MemStack/Model/*` - entities and DTOs
-- `PROJECT_CONTEXT.md` - high-level purpose and architecture intent
+Nexwork is the workflow client.
+MemStack is the knowledge store.
 
-## Run locally
+Nexwork now sends:
+
+- requirement context during feature creation
+- selected project relationships
+- lifecycle sync events
+- storage repository details
+- active Git account context for remote repo writes
+
+MemStack receives that data, structures it, and writes durable markdown to the selected storage repository.
+
+## Main endpoints
+
+- `GET /api/feature-memories`
+- `POST /api/feature-memories`
+- `POST /api/feature-memories/search`
+- `POST /api/feature-memories/ask`
+- `POST /api/feature-memories/sync-from-nexwork`
+- `GET /healthz`
+- `GET /openapi/v1.json`
+- `GET /swagger`
+
+## Storage model
+
+### Feature records
+
+- `Features/<year>/<feature-slug>/requirement.md`
+- `Features/<year>/<feature-slug>/implementation.md`
+
+These preserve per-feature history.
+
+### Wiki records
+
+- `Wiki/<topic>.md`
+
+These accumulate domain-level knowledge such as promotion, checkout, pricing, or tax.
+
+## Important implementation areas
+
+- `MemStack/Controller/FeatureMemoryController.cs`
+  API surface
+- `MemStack/Services/FeatureMemoryService.cs`
+  business logic and Nexwork sync mapping
+- `MemStack/Data/GitRepository.cs`
+  markdown writing and remote Git upserts
+- `MemStack/Data/MemStackDbContext.cs`
+  database context
+- `PROJECT_CONTEXT.md`
+  high-level architecture intent
+
+## Local development
 
 ```bash
 dotnet run --project "MemStack/MemStack.csproj"
 ```
 
-Default local URL comes from `MemStack/Properties/launchSettings.json`.
-
-## Try the API quickly
+Useful checks:
 
 ```bash
-curl -s http://localhost:5294/api/feature-memories | jq
-curl -s http://localhost:5294/healthz | jq
+dotnet build MemStack.sln
+```
+
+## Swagger
+
+MemStack now exposes Swagger UI at:
+
+```text
+/swagger
+```
+
+OpenAPI JSON:
+
+```text
+/openapi/v1.json
 ```
 
 ## Deploy to Render
 
 This repo is prepared for Docker-based Render deployment.
 
-### Runtime behavior
+Recommended settings:
 
-- Binds to Render's `PORT` automatically
-- Accepts forwarded headers from the Render proxy
-- Exposes:
-  - `/` basic service status
-  - `/healthz` health endpoint
-  - `/openapi/v1.json` OpenAPI document
+- Runtime: `Docker`
+- Branch: `main`
+- Root Directory: empty
 
-### Recommended environment variables
+Recommended environment variables:
 
 - `ASPNETCORE_ENVIRONMENT=Production`
 - `DATABASE_PATH=/var/data/memstack.db`
 - `GitPersistence__Enabled=false`
 
-Optional:
-- `ConnectionStrings__Default=Data Source=/var/data/memstack.db`
-
-`DATABASE_PATH` is preferred because the app will create the parent folder automatically.
-
-### Render service settings
-
-- Runtime: `Docker`
-- Root Directory: leave empty
-- Branch: `main`
-
-Render will build from the repo `Dockerfile`, so you do not need to enter custom build or start commands.
-
-If you want persistent SQLite storage, mount a Render disk and point `DATABASE_PATH` to that mount path, for example `/var/data/memstack.db`.
+If you want persistent SQLite storage, attach a Render disk and mount it at `/var/data`.
