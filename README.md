@@ -40,7 +40,7 @@ curl -s http://localhost:5294/healthz | jq
 
 ## Deploy to Render
 
-This repo is now prepared for Render web service deployment.
+This repo is prepared for Docker-based Render deployment.
 
 ### Runtime behavior
 
@@ -64,23 +64,10 @@ Optional:
 
 ### Render service settings
 
-- Runtime: `Dotnet`
-- Build Command:
+- Runtime: `Docker`
+- Root Directory: leave empty
+- Branch: `main`
 
-```bash
-dotnet publish MemStack/MemStack.csproj -c Release -o out
-```
-
-- Start Command:
-
-```bash
-dotnet out/MemStack.dll
-```
-
-- Root Directory:
-
-```text
-.
-```
+Render will build from the repo `Dockerfile`, so you do not need to enter custom build or start commands.
 
 If you want persistent SQLite storage, mount a Render disk and point `DATABASE_PATH` to that mount path, for example `/var/data/memstack.db`.
