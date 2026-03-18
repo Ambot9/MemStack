@@ -1,5 +1,6 @@
 using MemStack.Data;
 using MemStack.Model;
+using System.Text.Json;
 
 namespace MemStack.Services;
 
@@ -26,6 +27,85 @@ public class FeatureMemoryService(
             .Search(request.Query, request.ProductName, request.Status, request.Tags)
             .Select(MapToResponse)
             .ToList();
+    }
+
+    public FeatureMemoryPrepareRequirementResponse PrepareRequirement(FeatureMemoryPrepareRequirementRequest request)
+    {
+        var title = request.Title.Trim();
+        var description = request.Description.Trim();
+        var requirement = request.Requirement.Trim();
+        var productName = request.ProductName?.Trim();
+        var customerName = request.CustomerName?.Trim();
+        var projects = request.Projects
+            .Where(project => !string.IsNullOrWhiteSpace(project))
+            .Select(project => project.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var tags = request.Tags
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Select(tag => tag.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(tag => tag)
+            .ToList();
+
+        var lines = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            lines.Add($"# {title}");
+            lines.Add(string.Empty);
+        }
+
+        lines.Add("## Objective");
+        lines.Add(!string.IsNullOrWhiteSpace(requirement)
+            ? requirement
+            : !string.IsNullOrWhiteSpace(description)
+                ? description
+                : "Capture the intended feature behavior and expected user outcome.");
+
+        if (!string.IsNullOrWhiteSpace(description) &&
+            !string.Equals(description, requirement, StringComparison.OrdinalIgnoreCase))
+        {
+            lines.Add(string.Empty);
+            lines.Add("## Context");
+            lines.Add(description);
+        }
+
+        if (!string.IsNullOrWhiteSpace(productName) || !string.IsNullOrWhiteSpace(customerName) || projects.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("## Scope");
+
+            if (!string.IsNullOrWhiteSpace(productName))
+            {
+                lines.Add($"- Product: {productName}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(customerName))
+            {
+                lines.Add($"- Customer: {customerName}");
+            }
+
+            if (projects.Count > 0)
+            {
+                lines.Add($"- Related projects: {string.Join(", ", projects)}");
+            }
+        }
+
+        if (tags.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("## Tags");
+            lines.Add(string.Join(", ", tags));
+        }
+
+        return new FeatureMemoryPrepareRequirementResponse
+        {
+            Status = "prepared",
+            Summary = string.Join(Environment.NewLine, lines).Trim(),
+            Tags = tags,
+            Projects = projects
+        };
     }
 
     public FeatureMemoryAskResponse Ask(FeatureMemoryAskRequest request)
@@ -122,7 +202,7 @@ public class FeatureMemoryService(
         var now = DateTime.UtcNow;
         var existing = repository.GetByExternalFeatureId(request.Feature.Name);
         var memstackData = request.PluginData is not null && request.PluginData.TryGetValue("memstack", out var rawMemstack)
-            ? rawMemstack as Dictionary<string, object>
+            ? ToDictionary(rawMemstack)
             : null;
 
         var item = existing ?? new FeatureMemory
@@ -298,13 +378,18 @@ public class FeatureMemoryService(
 
     private static string BuildSummaryMarkdown(
         FeatureMemorySyncRequest request,
-        Dictionary<string, object>? memstackData,
+        Dictionary<string, object?>? memstackData,
         FeatureMemory current)
     {
         var requirementSummary = ExtractString(memstackData, "requirementSummary", current.SummaryMarkdown, string.Empty);
         if (!string.IsNullOrWhiteSpace(requirementSummary) && request.EventName == "feature.created")
         {
             return requirementSummary;
+        }
+
+        if (!string.IsNullOrWhiteSpace(current.SummaryMarkdown))
+        {
+            return current.SummaryMarkdown;
         }
 
         var lines = new List<string>
@@ -348,7 +433,7 @@ public class FeatureMemoryService(
             : $"{current.ImplementationMarkdown}{Environment.NewLine}{Environment.NewLine}---{Environment.NewLine}{newSection}";
     }
 
-    private static string BuildTags(FeatureMemorySyncRequest request, Dictionary<string, object>? memstackData, string existingTags)
+    private static string BuildTags(FeatureMemorySyncRequest request, Dictionary<string, object?>? memstackData, string existingTags)
     {
         var tags = new HashSet<string>(SplitCsv(existingTags), StringComparer.OrdinalIgnoreCase);
 
@@ -390,16 +475,16 @@ public class FeatureMemoryService(
         return string.IsNullOrWhiteSpace(fallback) ? "Planned" : fallback;
     }
 
-    private static string ExtractString(Dictionary<string, object>? source, string propertyName, string currentValue, string fallback)
+    private static string ExtractString(Dictionary<string, object?>? source, string propertyName, string currentValue, string fallback)
     {
         if (source is not null && source.TryGetValue(propertyName, out var value))
         {
-            if (value is string stringValue && !string.IsNullOrWhiteSpace(stringValue))
+            if (TryReadString(value, out var stringValue) && !string.IsNullOrWhiteSpace(stringValue))
             {
                 return stringValue.Trim();
             }
 
-            if (value is IEnumerable<object> listValue)
+            if (TryReadStringList(value, out var listValue))
             {
                 var joined = string.Join(", ", listValue.Select(item => item?.ToString()).Where(item => !string.IsNullOrWhiteSpace(item)));
                 if (!string.IsNullOrWhiteSpace(joined))
@@ -410,6 +495,85 @@ public class FeatureMemoryService(
         }
 
         return !string.IsNullOrWhiteSpace(currentValue) ? currentValue : fallback;
+    }
+
+    private static Dictionary<string, object?>? ToDictionary(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            Dictionary<string, object?> typedDictionary => typedDictionary,
+            JsonElement element when element.ValueKind == JsonValueKind.Object => element
+                .EnumerateObject()
+                .ToDictionary(
+                    property => property.Name,
+                    property => NormalizeJsonValue(property.Value),
+                    StringComparer.OrdinalIgnoreCase),
+            _ => null
+        };
+    }
+
+    private static object? NormalizeJsonValue(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            JsonElement element => element.ValueKind switch
+            {
+                JsonValueKind.Object => ToDictionary(element),
+                JsonValueKind.Array => element.EnumerateArray().Select(item => NormalizeJsonValue(item)).ToList(),
+                JsonValueKind.String => element.GetString(),
+                JsonValueKind.Number => element.ToString(),
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Null => null,
+                _ => element.ToString()
+            },
+            _ => value
+        };
+    }
+
+    private static bool TryReadString(object? value, out string result)
+    {
+        result = string.Empty;
+
+        switch (value)
+        {
+            case null:
+                return false;
+            case string stringValue:
+                result = stringValue;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.String:
+                result = element.GetString() ?? string.Empty;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryReadStringList(object? value, out List<string> result)
+    {
+        result = [];
+
+        switch (value)
+        {
+            case IEnumerable<object?> listValue:
+                result = listValue
+                    .Select(item => item?.ToString() ?? string.Empty)
+                    .Where(item => !string.IsNullOrWhiteSpace(item))
+                    .ToList();
+                return result.Count > 0;
+            case JsonElement element when element.ValueKind == JsonValueKind.Array:
+                result = element
+                    .EnumerateArray()
+                    .Select(item => item.ToString())
+                    .Where(item => !string.IsNullOrWhiteSpace(item))
+                    .ToList();
+                return result.Count > 0;
+            default:
+                return false;
+        }
     }
 
     private static IEnumerable<string> SplitCsv(string? value)

@@ -31,8 +31,6 @@ else if (string.IsNullOrWhiteSpace(configuredConnection))
 // Controllers + OpenAPI
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddOpenApi();
-builder.Services.AddSwaggerGen();
 
 // EF Core with SQLite (guide Step 5)
 builder.Services.AddDbContext<MemStackDbContext>(options =>
@@ -63,14 +61,6 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
 });
 
-app.UseSwagger();
-app.UseSwaggerUI(options =>
-{
-    options.SwaggerEndpoint("/swagger/v1/swagger.json", "MemStack API v1");
-    options.RoutePrefix = "swagger";
-});
-
-app.MapOpenApi();
 app.MapGet("/", () => Results.Ok(new
 {
     service = "MemStack",

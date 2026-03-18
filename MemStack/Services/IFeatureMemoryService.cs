@@ -7,6 +7,7 @@ public interface IFeatureMemoryService
     IReadOnlyList<FeatureMemoryResponse> GetAll();
     FeatureMemoryResponse? GetById(int id);
     IReadOnlyList<FeatureMemoryResponse> Search(FeatureMemorySearchRequest request);
+    FeatureMemoryPrepareRequirementResponse PrepareRequirement(FeatureMemoryPrepareRequirementRequest request);
     FeatureMemoryAskResponse Ask(FeatureMemoryAskRequest request);
     FeatureMemoryResponse SyncFromNexwork(FeatureMemorySyncRequest request);
     FeatureMemoryResponse Create(FeatureMemoryRequest request);

@@ -21,6 +21,22 @@ public class FeatureMemoryController(IFeatureMemoryService service) : Controller
         return Ok(service.Search(request));
     }
 
+    [HttpPost("prepare-requirement")]
+    public ActionResult<FeatureMemoryPrepareRequirementResponse> PrepareRequirement([FromBody] FeatureMemoryPrepareRequirementRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Title) && string.IsNullOrWhiteSpace(request.Requirement))
+        {
+            var errors = new Dictionary<string, string[]>
+            {
+                [nameof(FeatureMemoryPrepareRequirementRequest.Requirement)] = ["Either title or requirement is required."]
+            };
+
+            return ValidationProblem(new ValidationProblemDetails(errors));
+        }
+
+        return Ok(service.PrepareRequirement(request));
+    }
+
     [HttpPost("ask")]
     public ActionResult<FeatureMemoryAskResponse> Ask([FromBody] FeatureMemoryAskRequest request)
     {
