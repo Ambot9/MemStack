@@ -95,6 +95,7 @@ public class GitRepository : IGitRepository
         catch (Exception ex)
         {
             _logger.LogError(ex, "Git commit failed for {id}", memory.ExternalFeatureId);
+            throw;
         }
     }
 
