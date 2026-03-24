@@ -105,11 +105,15 @@ public class GitRepository : IGitRepository
         StorageTargetPayload storageTarget,
         GitAccountPayload gitAccount)
     {
+        _logger.LogInformation("[MemStack] Starting PushToRemoteRepository for feature {id} with operation {operation} to repo {repo} (provider: {provider})", memory.ExternalFeatureId, operation, storageTarget.Repository, gitAccount.Provider);
         var files = BuildRemoteFiles(memory, storageTarget);
         foreach (var file in files)
         {
+            _logger.LogInformation("[MemStack] Preparing to upsert remote file: {path}", file.Path);
             await UpsertRemoteFile(file.Path, file.Content, $"{operation.ToUpperInvariant()}: {file.Path}", storageTarget, gitAccount);
+            _logger.LogInformation("[MemStack] Finished upsert for remote file: {path}", file.Path);
         }
+        _logger.LogInformation("[MemStack] Completed PushToRemoteRepository for feature {id}", memory.ExternalFeatureId);
     }
 
     private List<(string Path, string Content)> BuildRemoteFiles(FeatureMemory memory, StorageTargetPayload storageTarget)
@@ -152,15 +156,18 @@ public class GitRepository : IGitRepository
         StorageTargetPayload storageTarget,
         GitAccountPayload gitAccount)
     {
+        _logger.LogInformation("[MemStack] UpsertRemoteFile called for {provider} {repo} {branch} path={path}", gitAccount.Provider, storageTarget.Repository, storageTarget.Branch, relativePath);
         if (gitAccount.Provider == "github")
         {
             await UpsertGithubFile(relativePath, content, commitMessage, storageTarget, gitAccount);
+            _logger.LogInformation("[MemStack] UpsertGithubFile completed for {path}", relativePath);
             return;
         }
 
         if (gitAccount.Provider == "gitlab" || gitAccount.Provider == "gitlab-self-hosted")
         {
             await UpsertGitlabFile(relativePath, content, commitMessage, storageTarget, gitAccount);
+            _logger.LogInformation("[MemStack] UpsertGitlabFile completed for {path}", relativePath);
             return;
         }
 
