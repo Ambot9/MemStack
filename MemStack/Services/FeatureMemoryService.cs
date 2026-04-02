@@ -199,6 +199,26 @@ public class FeatureMemoryService(
 
     public FeatureMemoryResponse SyncFromNexwork(FeatureMemorySyncRequest request)
     {
+        var persisted = PersistFromNexwork(request, commitToGit: true);
+        return MapToResponse(persisted);
+    }
+
+    public FeatureMemorySyncFilesResponse PrepareSyncFiles(FeatureMemorySyncRequest request)
+    {
+        var persisted = PersistFromNexwork(request, commitToGit: false);
+        var files = gitRepository.BuildFeatureFiles(persisted, request.StorageTarget);
+
+        return new FeatureMemorySyncFilesResponse
+        {
+            Status = "prepared",
+            FeatureExternalId = persisted.ExternalFeatureId,
+            CommitMessage = $"docs(memstack): sync {persisted.ExternalFeatureId}",
+            Files = files
+        };
+    }
+
+    private FeatureMemory PersistFromNexwork(FeatureMemorySyncRequest request, bool commitToGit)
+    {
         var now = DateTime.UtcNow;
         var existing = repository.GetByExternalFeatureId(request.Feature.Name);
         var memstackData = request.PluginData is not null && request.PluginData.TryGetValue("memstack", out var rawMemstack)
@@ -237,13 +257,16 @@ public class FeatureMemoryService(
             persisted = repository.Update(item) ?? item;
         }
 
-        gitRepository.CommitFeatureMemory(
-            persisted,
-            request.EventName,
-            request.StorageTarget,
-            request.GitAccount);
+        if (commitToGit)
+        {
+            gitRepository.CommitFeatureMemory(
+                persisted,
+                request.EventName,
+                request.StorageTarget,
+                request.GitAccount);
+        }
 
-        return MapToResponse(persisted);
+        return persisted;
     }
 
     public FeatureMemoryResponse Create(FeatureMemoryRequest request)

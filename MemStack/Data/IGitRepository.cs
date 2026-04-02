@@ -18,6 +18,10 @@ public interface IGitRepository
         StorageTargetPayload? storageTarget = null,
         GitAccountPayload? gitAccount = null);
 
+    List<FeatureMemorySyncFile> BuildFeatureFiles(
+        FeatureMemory memory,
+        StorageTargetPayload? storageTarget = null);
+
     /// <summary>
     /// Remove and commit deletion of feature memory files.
     /// </summary>

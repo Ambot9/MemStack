@@ -10,6 +10,7 @@ public interface IFeatureMemoryService
     FeatureMemoryPrepareRequirementResponse PrepareRequirement(FeatureMemoryPrepareRequirementRequest request);
     FeatureMemoryAskResponse Ask(FeatureMemoryAskRequest request);
     FeatureMemoryResponse SyncFromNexwork(FeatureMemorySyncRequest request);
+    FeatureMemorySyncFilesResponse PrepareSyncFiles(FeatureMemorySyncRequest request);
     FeatureMemoryResponse Create(FeatureMemoryRequest request);
     FeatureMemoryResponse? Update(int id, FeatureMemoryRequest request);
     FeatureMemoryResponse? Patch(int id, FeatureMemoryPatchRequest request);

@@ -99,6 +99,20 @@ public class GitRepository : IGitRepository
         }
     }
 
+    public List<FeatureMemorySyncFile> BuildFeatureFiles(
+        FeatureMemory memory,
+        StorageTargetPayload? storageTarget = null)
+    {
+        var target = storageTarget ?? new StorageTargetPayload();
+        return BuildRemoteFiles(memory, target)
+            .Select(file => new FeatureMemorySyncFile
+            {
+                Path = file.Path,
+                Content = file.Content
+            })
+            .ToList();
+    }
+
     private async Task PushToRemoteRepository(
         FeatureMemory memory,
         string operation,

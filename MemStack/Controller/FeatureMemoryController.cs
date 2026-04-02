@@ -68,6 +68,21 @@ public class FeatureMemoryController(IFeatureMemoryService service) : Controller
         return Ok(service.SyncFromNexwork(request));
     }
 
+    [HttpPost("prepare-sync-files")]
+    public ActionResult<FeatureMemorySyncFilesResponse> PrepareSyncFiles([FromBody] FeatureMemorySyncRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Feature?.Name))
+        {
+            var errors = new Dictionary<string, string[]>
+            {
+                [nameof(FeatureMemorySyncRequest.Feature)] = ["Feature payload is required."]
+            };
+            return ValidationProblem(new ValidationProblemDetails(errors));
+        }
+
+        return Ok(service.PrepareSyncFiles(request));
+    }
+
     [HttpGet("{id:int}")]
     public ActionResult<FeatureMemoryResponse> GetById(int id)
     {
