@@ -450,6 +450,18 @@ public class FeatureMemoryService(
                 $"- {project.Name}: status={project.Status}, branch={project.Branch}, base={project.BaseBranch ?? "unknown"}"));
         }
 
+        var codeAreaLines = request.Feature.Projects
+            .Where(project => project.ChangedFiles.Count > 0)
+            .SelectMany(project => project.ChangedFiles.Select(file => $"- {project.Name}: {file}"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (codeAreaLines.Count > 0)
+        {
+            lines.Add("Code Areas:");
+            lines.AddRange(codeAreaLines);
+        }
+
         var newSection = string.Join(Environment.NewLine, lines);
         return string.IsNullOrWhiteSpace(current.ImplementationMarkdown)
             ? newSection
@@ -458,16 +470,17 @@ public class FeatureMemoryService(
 
     private static string BuildTags(FeatureMemorySyncRequest request, Dictionary<string, object?>? memstackData, string existingTags)
     {
-        var tags = new HashSet<string>(SplitCsv(existingTags), StringComparer.OrdinalIgnoreCase);
+        var projectNames = new HashSet<string>(
+            request.Feature.Projects.Select(project => project.Name),
+            StringComparer.OrdinalIgnoreCase);
+
+        var tags = new HashSet<string>(
+            SplitCsv(existingTags).Where(tag => !projectNames.Contains(tag)),
+            StringComparer.OrdinalIgnoreCase);
 
         foreach (var tag in SplitCsv(ExtractString(memstackData, "tags", string.Empty, string.Empty)))
         {
             tags.Add(tag);
-        }
-
-        foreach (var project in request.Feature.Projects.Select(project => project.Name))
-        {
-            tags.Add(project);
         }
 
         return string.Join(", ", tags.OrderBy(tag => tag));
@@ -475,7 +488,7 @@ public class FeatureMemoryService(
 
     private static string InferProductName(FeatureSyncPayload feature)
     {
-        return feature.Projects.FirstOrDefault()?.Name ?? "Unknown";
+        return "Unknown";
     }
 
     private static string MapFeatureStatus(FeatureMemorySyncRequest request, string fallback)

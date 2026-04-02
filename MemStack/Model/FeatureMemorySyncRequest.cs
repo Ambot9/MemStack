@@ -32,6 +32,7 @@ public class FeatureSyncProjectPayload
     public string? BaseBranch { get; set; }
     public string? WorktreePath { get; set; }
     public string? LastUpdated { get; set; }
+    public List<string> ChangedFiles { get; set; } = [];
 }
 
 public class StorageTargetPayload

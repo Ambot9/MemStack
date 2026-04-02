@@ -414,6 +414,9 @@ public class GitRepository : IGitRepository
 - Not recorded yet in the current API payload.
 - Infer related systems from tags, product name, and implementation notes.
 
+## Code Areas
+{EnsureSectionContent(ExtractCodeAreas(m))}
+
 ## Logic Changed
 {EnsureSectionContent(ExtractLogicChanged(m))}
 
@@ -621,6 +624,45 @@ MemStack should help answer future questions like:
         return lines.Count > 0
             ? string.Join(Environment.NewLine, lines.Select(line => $"- {line}"))
             : FirstNonEmpty(memory.ImplementationMarkdown, memory.SummaryMarkdown, "No implementation logic summary recorded yet.");
+    }
+
+    private static string ExtractCodeAreas(FeatureMemory memory)
+    {
+        var lines = FirstNonEmpty(memory.ImplementationMarkdown, memory.SummaryMarkdown)
+            .Split(["\r\n", "\n"], StringSplitOptions.None)
+            .Select(line => line.Trim())
+            .ToList();
+
+        var codeAreas = new List<string>();
+        var inCodeAreas = false;
+
+        foreach (var line in lines)
+        {
+            if (line.Equals("Code Areas:", StringComparison.OrdinalIgnoreCase))
+            {
+                inCodeAreas = true;
+                continue;
+            }
+
+            if (!inCodeAreas)
+            {
+                continue;
+            }
+
+            if (line == "---" || (line.EndsWith(":", StringComparison.Ordinal) && !line.StartsWith("- ")))
+            {
+                break;
+            }
+
+            if (line.StartsWith("- ", StringComparison.Ordinal))
+            {
+                codeAreas.Add(line);
+            }
+        }
+
+        return codeAreas.Count > 0
+            ? string.Join(Environment.NewLine, codeAreas.Distinct(StringComparer.OrdinalIgnoreCase))
+            : "- No code areas were captured for this feature yet.";
     }
 
     private static string ExtractMoneyLogic(FeatureMemory memory)
