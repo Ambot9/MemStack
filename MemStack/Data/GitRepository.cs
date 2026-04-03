@@ -410,6 +410,12 @@ public class GitRepository : IGitRepository
 ## Implementation Summary
 {EnsureSectionContent(FirstNonEmpty(m.ImplementationMarkdown, m.SummaryMarkdown))}
 
+## Handled Flows
+{EnsureSectionContent(ExtractHandledFlows(m))}
+
+## Method Evidence
+{EnsureSectionContent(ExtractMethodEvidence(m))}
+
 ## Changed Projects
 - Not recorded yet in the current API payload.
 - Infer related systems from tags, product name, and implementation notes.
@@ -663,6 +669,84 @@ MemStack should help answer future questions like:
         return codeAreas.Count > 0
             ? string.Join(Environment.NewLine, codeAreas.Distinct(StringComparer.OrdinalIgnoreCase))
             : "- No code areas were captured for this feature yet.";
+    }
+
+    private static string ExtractMethodEvidence(FeatureMemory memory)
+    {
+        var lines = FirstNonEmpty(memory.ImplementationMarkdown, memory.SummaryMarkdown)
+            .Split(["\r\n", "\n"], StringSplitOptions.None)
+            .Select(line => line.Trim())
+            .ToList();
+
+        var methods = new List<string>();
+        var inMethodEvidence = false;
+
+        foreach (var line in lines)
+        {
+            if (line.Equals("Method Evidence:", StringComparison.OrdinalIgnoreCase))
+            {
+                inMethodEvidence = true;
+                continue;
+            }
+
+            if (!inMethodEvidence)
+            {
+                continue;
+            }
+
+            if (line == "---" || (line.EndsWith(":", StringComparison.Ordinal) && !line.StartsWith("- ")))
+            {
+                break;
+            }
+
+            if (line.StartsWith("- ", StringComparison.Ordinal))
+            {
+                methods.Add(line);
+            }
+        }
+
+        return methods.Count > 0
+            ? string.Join(Environment.NewLine, methods.Distinct(StringComparer.OrdinalIgnoreCase))
+            : "- No method evidence was captured for this feature yet.";
+    }
+
+    private static string ExtractHandledFlows(FeatureMemory memory)
+    {
+        var lines = FirstNonEmpty(memory.ImplementationMarkdown, memory.SummaryMarkdown)
+            .Split(["\r\n", "\n"], StringSplitOptions.None)
+            .Select(line => line.Trim())
+            .ToList();
+
+        var flows = new List<string>();
+        var inHandledFlows = false;
+
+        foreach (var line in lines)
+        {
+            if (line.Equals("Handled Flows:", StringComparison.OrdinalIgnoreCase))
+            {
+                inHandledFlows = true;
+                continue;
+            }
+
+            if (!inHandledFlows)
+            {
+                continue;
+            }
+
+            if (line == "---" || (line.EndsWith(":", StringComparison.Ordinal) && !line.StartsWith("- ")))
+            {
+                break;
+            }
+
+            if (line.StartsWith("- ", StringComparison.Ordinal))
+            {
+                flows.Add(line);
+            }
+        }
+
+        return flows.Count > 0
+            ? string.Join(Environment.NewLine, flows.Distinct(StringComparer.OrdinalIgnoreCase))
+            : "- No handled flows were captured for this feature yet.";
     }
 
     private static string ExtractMoneyLogic(FeatureMemory memory)

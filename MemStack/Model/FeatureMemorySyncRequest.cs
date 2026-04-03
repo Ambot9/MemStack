@@ -33,6 +33,19 @@ public class FeatureSyncProjectPayload
     public string? WorktreePath { get; set; }
     public string? LastUpdated { get; set; }
     public List<string> ChangedFiles { get; set; } = [];
+    public List<FeatureSyncCodeSymbolPayload> CodeSymbols { get; set; } = [];
+}
+
+public class FeatureSyncCodeSymbolPayload
+{
+    public string File { get; set; } = string.Empty;
+    public List<FeatureSyncSymbolPayload> Symbols { get; set; } = [];
+}
+
+public class FeatureSyncSymbolPayload
+{
+    public string Kind { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
 }
 
 public class StorageTargetPayload

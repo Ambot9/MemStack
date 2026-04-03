@@ -230,7 +230,7 @@ public class FeatureMemoryService(
             ExternalFeatureId = request.Feature.Name,
             SourceSystem = "nexwork",
             Title = request.Feature.Name,
-            ProductName = InferProductName(request.Feature),
+            ProductName = InferProductName(request, memstackData),
             CustomerName = "Nexwork",
             CreatedAtUtc = ParseDateOrFallback(request.Feature.CreatedAt, now),
         };
@@ -238,7 +238,7 @@ public class FeatureMemoryService(
         item.ExternalFeatureId = request.Feature.Name;
         item.SourceSystem = "nexwork";
         item.Title = request.Feature.Name;
-        item.ProductName = ExtractString(memstackData, "productName", item.ProductName, InferProductName(request.Feature));
+        item.ProductName = ExtractString(memstackData, "productName", item.ProductName, InferProductName(request, memstackData));
         item.CustomerName = ExtractString(memstackData, "customerName", item.CustomerName, "Nexwork");
         item.RequirementMarkdown = ExtractString(memstackData, "requirement", item.RequirementMarkdown, item.RequirementMarkdown);
         item.SummaryMarkdown = BuildSummaryMarkdown(request, memstackData, item);
@@ -462,6 +462,27 @@ public class FeatureMemoryService(
             lines.AddRange(codeAreaLines);
         }
 
+        var methodEvidenceLines = request.Feature.Projects
+            .SelectMany(project => project.CodeSymbols.SelectMany(entry =>
+                entry.Symbols
+                    .Where(symbol => string.Equals(symbol.Kind, "method", StringComparison.OrdinalIgnoreCase))
+                    .Select(symbol => $"- {project.Name}: {symbol.Name}")))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (methodEvidenceLines.Count > 0)
+        {
+            lines.Add("Method Evidence:");
+            lines.AddRange(methodEvidenceLines);
+        }
+
+        var handledFlows = InferHandledFlows(request.Feature);
+        if (handledFlows.Count > 0)
+        {
+            lines.Add("Handled Flows:");
+            lines.AddRange(handledFlows.Select(flow => $"- {flow}"));
+        }
+
         var newSection = string.Join(Environment.NewLine, lines);
         return string.IsNullOrWhiteSpace(current.ImplementationMarkdown)
             ? newSection
@@ -483,12 +504,52 @@ public class FeatureMemoryService(
             tags.Add(tag);
         }
 
+        foreach (var inferredTag in InferTopics(request, memstackData))
+        {
+            if (!projectNames.Contains(inferredTag))
+            {
+                tags.Add(inferredTag);
+            }
+        }
+
         return string.Join(", ", tags.OrderBy(tag => tag));
     }
 
     private static string InferProductName(FeatureSyncPayload feature)
     {
-        return "Unknown";
+        var analysisText = string.Join(
+            Environment.NewLine,
+            feature.Name ?? string.Empty,
+            feature.PluginRefs?.ToString() ?? string.Empty);
+
+        if (ContainsAny(analysisText, "payment", "deposit", "withdraw", "provider", "currency", "bank", "merchant"))
+        {
+            return "Payment";
+        }
+
+        if (ContainsAny(analysisText, "promotion", "bonus", "cashback", "first deposit", "referral", "rebate"))
+        {
+            return "Promotion";
+        }
+
+        return "General";
+    }
+
+    private static string InferProductName(FeatureMemorySyncRequest request, Dictionary<string, object?>? memstackData)
+    {
+        var analysisText = BuildAnalysisText(request, memstackData);
+
+        if (ContainsAny(analysisText, "payment", "deposit", "withdraw", "provider", "currency", "bank", "merchant"))
+        {
+            return "Payment";
+        }
+
+        if (ContainsAny(analysisText, "promotion", "bonus", "cashback", "first deposit", "referral", "rebate"))
+        {
+            return "Promotion";
+        }
+
+        return "General";
     }
 
     private static string MapFeatureStatus(FeatureMemorySyncRequest request, string fallback)
@@ -617,6 +678,108 @@ public class FeatureMemoryService(
         return (value ?? string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(item => !string.IsNullOrWhiteSpace(item));
+    }
+
+    private static List<string> InferHandledFlows(FeatureSyncPayload feature)
+    {
+        var flows = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var symbolName in feature.Projects
+                     .SelectMany(project => project.CodeSymbols)
+                     .SelectMany(entry => entry.Symbols)
+                     .Select(symbol => symbol.Name))
+        {
+            if (symbolName.Contains("GetBankList", StringComparison.OrdinalIgnoreCase))
+                flows.Add("GetBankList");
+            if (symbolName.Contains("Deposit", StringComparison.OrdinalIgnoreCase))
+                flows.Add("Deposit");
+            if (symbolName.Contains("Withdraw", StringComparison.OrdinalIgnoreCase))
+                flows.Add("Withdraw");
+            if (symbolName.Contains("Callback", StringComparison.OrdinalIgnoreCase) ||
+                symbolName.Contains("Notify", StringComparison.OrdinalIgnoreCase))
+                flows.Add("Callback");
+        }
+
+        return flows.OrderBy(flow => flow).ToList();
+    }
+
+    private static IEnumerable<string> InferTopics(FeatureMemorySyncRequest request, Dictionary<string, object?>? memstackData)
+    {
+        var topics = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var analysisText = BuildAnalysisText(request, memstackData);
+
+        if (ContainsAny(analysisText, "payment", "deposit", "withdraw", "provider", "currency", "bank", "merchant"))
+        {
+            topics.Add("payment");
+        }
+
+        if (ContainsAny(analysisText, "promotion", "bonus", "cashback", "first deposit", "referral", "rebate"))
+        {
+            topics.Add("promotion");
+        }
+
+        var providerName = ExtractProviderName(analysisText);
+        if (!string.IsNullOrWhiteSpace(providerName))
+        {
+            topics.Add(providerName);
+        }
+
+        return topics;
+    }
+
+    private static string BuildAnalysisText(FeatureMemorySyncRequest request, Dictionary<string, object?>? memstackData)
+    {
+        return string.Join(
+            Environment.NewLine,
+            request.Feature.Name ?? string.Empty,
+            ExtractString(memstackData, "productName", string.Empty, string.Empty),
+            ExtractString(memstackData, "customerName", string.Empty, string.Empty),
+            ExtractString(memstackData, "requirement", string.Empty, string.Empty),
+            ExtractString(memstackData, "requirementSummary", string.Empty, string.Empty));
+    }
+
+    private static bool ContainsAny(string text, params string[] needles)
+    {
+        return needles.Any(needle => text.Contains(needle, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string ExtractProviderName(string text)
+    {
+        var knownProviders = new[]
+        {
+            "paygrid",
+            "toppay",
+            "aba pay",
+            "abapay",
+            "sudalink",
+            "stripe",
+            "telegram pay",
+        };
+
+        foreach (var provider in knownProviders)
+        {
+            if (text.Contains(provider, StringComparison.OrdinalIgnoreCase))
+            {
+                return provider
+                    .ToLowerInvariant()
+                    .Replace(" ", "-");
+            }
+        }
+
+        var lines = text.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (!line.Contains("payment name", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var parts = line.Split(':', 2);
+            if (parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[1]))
+            {
+                return parts[1].Trim().ToLowerInvariant().Replace(" ", "-");
+            }
+        }
+
+        return string.Empty;
     }
 
     private static DateTime ParseDateOrFallback(string? value, DateTime fallback)
