@@ -155,7 +155,9 @@ public class GitRepository : IGitRepository
         var featureKey = ToSlug(memory.ExternalFeatureId);
         content = UpsertSectionEntry(content, "Current Logic", featureKey, BuildCurrentLogicEntry(memory));
         content = UpsertSectionEntry(content, "Requirement History", featureKey, BuildRequirementHistoryEntry(memory));
-        content = UpsertSectionEntry(content, "Money Logic", featureKey, BuildMoneyLogicEntry(memory));
+        var moneyLogic = ExtractMoneyLogic(memory);
+        if (!string.IsNullOrWhiteSpace(moneyLogic) && !moneyLogic.StartsWith("- No explicit money"))
+            content = UpsertSectionEntry(content, "Money Logic", featureKey, BuildWikiEntry(memory, moneyLogic));
         content = UpsertSectionEntry(content, "Customer Reply Guide", featureKey, BuildCustomerReplyEntry(memory));
         content = UpsertSectionEntry(content, "Related Sprint Items", featureKey, BuildSprintEntry(memory));
         content = UpsertSectionEntry(content, "Related Features", featureKey, BuildRelatedFeatureEntry(memory));
@@ -351,7 +353,9 @@ public class GitRepository : IGitRepository
             var featureKey = ToSlug(memory.ExternalFeatureId);
             content = UpsertSectionEntry(content, "Current Logic", featureKey, BuildCurrentLogicEntry(memory));
             content = UpsertSectionEntry(content, "Requirement History", featureKey, BuildRequirementHistoryEntry(memory));
-            content = UpsertSectionEntry(content, "Money Logic", featureKey, BuildMoneyLogicEntry(memory));
+            var moneyLogic = ExtractMoneyLogic(memory);
+            if (!string.IsNullOrWhiteSpace(moneyLogic) && !moneyLogic.StartsWith("- No explicit money"))
+                content = UpsertSectionEntry(content, "Money Logic", featureKey, BuildWikiEntry(memory, moneyLogic));
             content = UpsertSectionEntry(content, "Customer Reply Guide", featureKey, BuildCustomerReplyEntry(memory));
             content = UpsertSectionEntry(content, "Related Sprint Items", featureKey, BuildSprintEntry(memory));
             content = UpsertSectionEntry(content, "Related Features", featureKey, BuildRelatedFeatureEntry(memory));
