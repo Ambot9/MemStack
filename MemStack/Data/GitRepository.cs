@@ -752,7 +752,7 @@ MemStack should help answer future questions like:
     private static string ExtractMoneyLogic(FeatureMemory memory)
     {
         var lines = ExtractRelevantLines(
-            string.Join(Environment.NewLine, memory.RequirementMarkdown, memory.ImplementationMarkdown, memory.SummaryMarkdown),
+            string.Join(Environment.NewLine, memory.RequirementMarkdown, memory.SummaryMarkdown),
             ["money", "price", "pricing", "amount", "promotion", "discount", "tax", "fee", "payment", "total", "round"]);
 
         return lines.Count > 0

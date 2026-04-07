@@ -484,9 +484,14 @@ public class FeatureMemoryService(
         }
 
         var newSection = string.Join(Environment.NewLine, lines);
-        return string.IsNullOrWhiteSpace(current.ImplementationMarkdown)
-            ? newSection
-            : $"{current.ImplementationMarkdown}{Environment.NewLine}{Environment.NewLine}---{Environment.NewLine}{newSection}";
+        if (string.IsNullOrWhiteSpace(current.ImplementationMarkdown))
+            return newSection;
+
+        var todayPrefix = $"Sync event: {request.EventName}{Environment.NewLine}Updated at: {DateTime.UtcNow:yyyy-MM-dd}";
+        if (current.ImplementationMarkdown.Contains(todayPrefix, StringComparison.OrdinalIgnoreCase))
+            return current.ImplementationMarkdown;
+
+        return $"{current.ImplementationMarkdown}{Environment.NewLine}{Environment.NewLine}---{Environment.NewLine}{newSection}";
     }
 
     private static string BuildTags(FeatureMemorySyncRequest request, Dictionary<string, object?>? memstackData, string existingTags)
@@ -522,7 +527,8 @@ public class FeatureMemoryService(
             feature.Name ?? string.Empty,
             feature.PluginRefs?.ToString() ?? string.Empty);
 
-        if (ContainsAny(analysisText, "payment", "deposit", "withdraw", "provider", "currency", "bank", "merchant"))
+        if (ContainsAny(analysisText, "payment", "deposit", "withdraw", "provider", "currency", "bank", "merchant",
+            "paygrid", "toppay", "abapay", "aba pay", "sudalink", "stripe"))
         {
             return "Payment";
         }
@@ -539,7 +545,8 @@ public class FeatureMemoryService(
     {
         var analysisText = BuildAnalysisText(request, memstackData);
 
-        if (ContainsAny(analysisText, "payment", "deposit", "withdraw", "provider", "currency", "bank", "merchant"))
+        if (ContainsAny(analysisText, "payment", "deposit", "withdraw", "provider", "currency", "bank", "merchant",
+            "paygrid", "toppay", "abapay", "aba pay", "sudalink", "stripe"))
         {
             return "Payment";
         }
